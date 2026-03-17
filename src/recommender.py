@@ -14,6 +14,9 @@ class HybridRecommenderArtifacts:
     hybrid_matrix: np.ndarray       # 存储“歌词向量 + 音频特征”的最终矩阵
 
 #把文字变成数字，把不同的特征拼在一起。
+'''
+This function is used to build the hybrid artifacts for the hybrid recommender.
+'''
 def build_hybrid_artifacts(
     combined_df: pd.DataFrame,
     *,
@@ -60,43 +63,65 @@ def build_hybrid_artifacts(
         hybrid_matrix=hybrid_matrix,
     )
 
+'''
+This function is used to get the hybrid recommendations for a given song.
+'''
 def get_hybrid_recommendations(
-    song_id: str,
+    query: str,                  # 现在支持输入 ID 或者 歌名
     combined_df: pd.DataFrame,
-    artifacts: HybridRecommenderArtifacts, # 必须传入计算好的 Artifacts
+    artifacts: HybridRecommenderArtifacts,
     top_n: int = 10,
     *,
     id_col: str = "track_id",
+    name_col: str = "song"       # 歌名列的名称
 ) -> pd.DataFrame:
     """
-    基于余弦相似度返回推荐结果
+    核心推荐引擎：输入一个 ID 或 歌名，返回最相似的歌曲列表。
     """
-    # 找到目标歌曲的索引
-    match = combined_df.index[combined_df[id_col].astype(str) == str(song_id)]
+    
+    # --- 第一步：定位歌曲在库中的位置 ---
+    # 首先尝试通过 ID 匹配
+    match = combined_df.index[combined_df[id_col].astype(str) == str(query)]
+    
+    # 如果 ID 没匹配到，尝试通过歌名匹配 (忽略大小写)
     if len(match) == 0:
-        raise KeyError(f"未找到 song_id: {song_id}")
+        match = combined_df.index[combined_df[name_col].str.lower() == str(query).lower()]
+    
+    # 如果还是没找到，说明库里确实没有
+    if len(match) == 0:
+        raise KeyError(f"在数据库中未找到相关的歌曲 ID 或歌名: '{query}'")
 
+    # 获取这首歌在矩阵中的行索引（Row Position）
+    # get_indexer 会根据 index 找到它在数组中的第几行
     query_row_pos = combined_df.index.get_indexer([match[0]])[0]
     
-    # 获取目标歌曲的特征向量
+    # --- 第二步：提取特征并计算相似度 ---
+    # 从“终极地图”里取出这首歌的特征向量
+    # reshape(1, -1) 是为了把 1D 数组变成 2D 矩阵，满足相似度计算的格式
     query_vec = artifacts.hybrid_matrix[query_row_pos].reshape(1, -1)
 
-    # 计算与库中所有歌曲的相似度
+    # 计算该向量与地图中“所有歌曲”的余弦相似度
+    # 
     sims = cosine_similarity(query_vec, artifacts.hybrid_matrix).ravel()
 
-    # 排除自身
+    # --- 第三步：排序与筛选 ---
+    # 排除掉搜索的歌曲本身（相似度设为负无穷），防止第一名永远是自己
     sims[query_row_pos] = -np.inf
 
-    # 获取相似度最高的前 N 个索引
+    # 获取相似度最高的前 top_n 个索引
+    # np.argsort 会返回排序后的下标，加负号表示降序排
     top_idx = np.argsort(-sims)[:top_n]
 
-    # 构建返回结果
+    # --- 第四步：包装结果返回 ---
+    # 从原始数据表格 (combined_df) 中提取出这几首歌的信息
     out = combined_df.iloc[top_idx].copy()
+    
+    # 添加排名和相似度分数
     out.insert(0, "rank", np.arange(1, len(out) + 1))
     out["score"] = sims[top_idx]
 
+    # 只返回用户关心的列
     return out[["rank", id_col, "artist", "song", "score"]].reset_index(drop=True)
-
 
 '''
 情况 1：输入的歌曲在你的“地图”里
