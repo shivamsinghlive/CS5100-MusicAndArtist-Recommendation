@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -107,7 +107,7 @@ def get_hybrid_recommendations(
     if len(match) == 0:
         raise KeyError(f"song_id `{song_id}` not found in combined_df[{id_col}]")
 
-    query_row_pos = int(np.flatnonzero(combined_df.index == match[0])[0])
+    query_row_pos = int(combined_df.index.get_indexer([match[0]])[0])
     query_vec = artifacts.hybrid_matrix[query_row_pos]
 
     sims = cosine_similarity(query_vec, artifacts.hybrid_matrix).ravel()
