@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import pandas as pd
-
+'''
+This file is responsible for handling all the dirty work: 
+reading the raw CSV files, cleaning the data, 
+and aligning the audio features with the lyrics. 
+Its output is a clean, 
+merged DataFrame or Parquet file that your model 
+can use directly.
+'''
 
 def load_and_clean_data(path: str) -> pd.DataFrame:
     """

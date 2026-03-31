@@ -16,6 +16,18 @@ class HybridRecommenderArtifacts:
 #把文字变成数字，把不同的特征拼在一起。
 '''
 This function is used to build the hybrid artifacts for the hybrid recommender.
+这是“离线阶段”运行的代码，任务是把原始表格变成数学矩阵。
+这是“离线阶段”运行的代码，任务是把原始表格变成数学矩阵。
+
+加载模型：SentenceTransformer 加载了多语言 BERT 模型。
+生成 Embedding：这是最耗时的步骤。
+
+核心逻辑：它不再是数单词出现了几次（TF-IDF），而是通过神经网络理解歌词的意境。
+
+特征拼接 (Feature Fusion)：
+np.hstack([embeddings, audio_features])。
+
+复习要点：这就是所谓的 Hybrid（混合）。如果你不仅想让推荐的歌“歌词意思像”，还想让它们的“节奏、能量感”也像，就需要这一步。
 '''
 def build_hybrid_artifacts(
     combined_df: pd.DataFrame,
