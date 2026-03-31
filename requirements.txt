@@ -5,8 +5,11 @@ This file lists all the dependencies for the project.
 pandas
 numpy
 scikit-learn
-scipy
 nltk
 sentence-transformers
 faiss-cpu
-
+streamlit
+plotly
+pyarrow
+scipy
+umap-learn
