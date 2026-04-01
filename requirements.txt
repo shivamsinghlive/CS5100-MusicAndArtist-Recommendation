@@ -1,7 +1,3 @@
-'''
-This file lists all the dependencies for the project.
-
-'''
 pandas
 numpy
 scikit-learn
