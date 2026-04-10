@@ -31,3 +31,17 @@ python -m scripts.build_artifacts
 ```bash
 streamlit run app/streamlit_app.py
 ```
+
+## Quantitative evaluation (for report Results section)
+Run a quick baseline comparison between TF-IDF and Embedding recommenders:
+```bash
+python -m scripts.evaluate_recommenders --top-k 5 --n-queries 200
+```
+This writes a metrics table to `results/evaluation_metrics.csv` with:
+- `precision@k`
+- `recall@k`
+- `ndcg@k`
+
+## Notes
+- Hybrid mode requires `data_parquet/spotify_audio_features.parquet`.
+- If audio features are missing, the app falls back to lyrics-only recommendations and shows a warning in the UI.

@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sklearn.decomposition import PCA
 
 from app.config import (
     DEFAULT_LYRICS_CSV, DEFAULT_LYRICS_PARQUET, DEFAULT_AUDIO_PARQUET,
@@ -20,7 +21,7 @@ from app.preprocess import add_cleaned_text
 from app.tfidf_recommender import TfidfRecommender
 from app.embedding_recommender import EmbeddingRecommender
 from app.hybrid_recommender import HybridRecommender, apply_context_filters
-from app.explainability import explain_recommendation
+from app.explainability import explain_recommendation, explain_tfidf_overlap
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -33,13 +34,57 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+/* Force dark color scheme regardless of OS/browser preference */
+:root { color-scheme: dark; }
+
 .stApp { background-color: #0f0f1a; }
+[data-testid="stAppViewContainer"] { background-color: #0f0f1a; color: #e0e0f0; }
+[data-testid="stHeader"] { background: #0f0f1a; }
+[data-testid="stToolbar"] { background: transparent; }
 
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
     border-right: 1px solid #2d2d5e;
 }
 [data-testid="stSidebar"] * { color: #e0e0f0 !important; }
+
+/* Inputs and controls */
+.stTextInput > div > div > input,
+.stTextArea textarea,
+div[data-baseweb="select"] > div,
+div[data-baseweb="select"] input {
+    background-color: #1b1b34 !important;
+    color: #e8e8ff !important;
+    border-color: #3a3a6a !important;
+}
+
+/* DataFrame and chart containers */
+[data-testid="stDataFrame"],
+[data-testid="stPlotlyChart"],
+[data-testid="stMetric"] {
+    background-color: #131327 !important;
+    border: 1px solid #2d2d55;
+    border-radius: 10px;
+    padding: 0.3rem;
+}
+
+/* Metric text readability on dark cards */
+[data-testid="stMetric"] label,
+[data-testid="stMetric"] [data-testid="stMetricLabel"],
+[data-testid="stMetric"] [data-testid="stMetricLabel"] * {
+    color: #8f92bd !important;
+    opacity: 1 !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricValue"],
+[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: #e8e8ff !important;
+    opacity: 1 !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricDelta"],
+[data-testid="stMetric"] [data-testid="stMetricDelta"] * {
+    color: #7dd3fc !important;
+    opacity: 1 !important;
+}
 
 .main-title {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -79,6 +124,74 @@ st.markdown("""
 .section-header {
     font-size: 1.2rem; font-weight: 700; color: #c0c0f0;
     border-left: 3px solid #667eea; padding-left: 0.6rem; margin: 1.2rem 0 0.8rem;
+}
+
+/* ── Nav buttons: dark ghost style ── */
+.stButton > button {
+    background: rgba(20, 20, 45, 0.7) !important;
+    color: #8890cc !important;
+    -webkit-text-fill-color: #8890cc !important;
+    border: 1px solid #2e2e5a !important;
+    border-radius: 8px !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    min-height: 2.1rem !important;
+    width: 100% !important;
+    transition: all 0.15s ease !important;
+}
+.stButton > button p,
+.stButton > button span {
+    color: #8890cc !important;
+    -webkit-text-fill-color: #8890cc !important;
+}
+.stButton > button:hover,
+.stButton > button:focus {
+    background: rgba(102, 126, 234, 0.12) !important;
+    border-color: #667eea !important;
+    color: #b8c0ff !important;
+    -webkit-text-fill-color: #b8c0ff !important;
+}
+.stButton > button:hover p,
+.stButton > button:hover span,
+.stButton > button:focus p,
+.stButton > button:focus span {
+    color: #b8c0ff !important;
+    -webkit-text-fill-color: #b8c0ff !important;
+}
+.stButton > button:disabled {
+    opacity: 0.3 !important;
+    cursor: not-allowed !important;
+}
+
+/* ── Page badge ── */
+.page-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 2.1rem;
+    background: rgba(102, 126, 234, 0.06);
+    border: 1px solid #2e2e5a;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    color: #5a6090;
+    letter-spacing: 0.05em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 3D tip line — white text on dark banner (avoid st.info default blue) */
+.custom-info-banner {
+    background: #132043;
+    border: 1px solid #2b4ea1;
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    margin: 0.25rem 0 0.75rem 0;
+    font-size: 0.92rem;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+.custom-info-banner * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -137,8 +250,24 @@ def _row_indices_for_songs(df: pd.DataFrame, songs: list[str]) -> set[int]:
     return out
 
 
-# ── 3D Visualization (cached because UMAP is slow) ───────────────────────────
-@st.cache_data(show_spinner="🌐 Computing 3D layout (UMAP)… this may take ~1 min the first time")
+def _safe_recommend(model, song_name: str, top_n: int, offset: int) -> pd.DataFrame:
+    """Call recommend() with backward compatibility for older cached model instances."""
+    try:
+        return model.recommend(song_name, top_n=top_n, offset=offset)
+    except TypeError:
+        return model.recommend(song_name, top_n=top_n)
+
+
+def _safe_semantic_search(model, prompt: str, top_n: int, offset: int) -> pd.DataFrame:
+    """Call semantic_search() with backward compatibility for older cached instances."""
+    try:
+        return model.semantic_search(prompt, top_n=top_n, offset=offset)
+    except TypeError:
+        return model.semantic_search(prompt, top_n=top_n)
+
+
+# ── 3D Visualization (cached; PCA is stable in Streamlit reruns) ─────────────
+@st.cache_data(show_spinner="🌐 Computing 3D layout (PCA)…")
 def compute_umap_coords(
     emb_key: str,
     n_samples: int = 2000,
@@ -150,15 +279,9 @@ def compute_umap_coords(
     Returns a DataFrame with columns: song, artist, x, y, z, df_idx (row index in embedding table).
 
     Always tries to include the current seed song and recommended songs in the sample.
-    ``df_idx`` is stored so :func:`ensure_songs_in_viz` can ``transform()`` any still-missing
-    songs into the **same** UMAP space as the fitted sample.
+    ``df_idx`` is stored so :func:`ensure_songs_in_viz` can transform any still-missing
+    songs into the same PCA space as the fitted sample.
     """
-    try:
-        import umap as umap_lib
-    except ImportError:
-        st.error("Please install umap-learn: `pip install umap-learn`")
-        return pd.DataFrame()
-
     emb_model = get_embedding_model()
     df_meta = emb_model.df
     embeddings = emb_model.embeddings
@@ -187,9 +310,7 @@ def compute_umap_coords(
     sample_emb = embeddings[idx].astype(np.float32)
     sample_meta = df_meta.iloc[idx].reset_index(drop=True)
 
-    # UMAP requires n_neighbors < n_samples
-    nn = min(15, max(2, len(sample_emb) - 1))
-    reducer = umap_lib.UMAP(n_components=3, random_state=42, n_neighbors=nn, min_dist=0.1)
+    reducer = PCA(n_components=3, random_state=42)
     coords = reducer.fit_transform(sample_emb)
 
     result = sample_meta[["artist", "song"]].copy()
@@ -204,15 +325,9 @@ def compute_umap_coords(
 def ensure_songs_in_viz(viz_df: pd.DataFrame, must_include: list[str]) -> pd.DataFrame:
     """
     If seed / recommended songs are missing from ``viz_df`` (e.g. cache from an older run,
-    or name mismatch), project their embeddings with ``UMAP.transform`` after fitting on the
-    same sample embeddings already shown — so 3D positions are consistent with the plot,
-    not a second independent UMAP.
+    or name mismatch), project their embeddings with ``PCA.transform`` after fitting on the
+    same sample embeddings already shown — so 3D positions are consistent with the plot.
     """
-    try:
-        import umap as umap_lib
-    except ImportError:
-        return viz_df
-
     if viz_df.empty or "df_idx" not in viz_df.columns:
         return viz_df
 
@@ -255,15 +370,14 @@ def ensure_songs_in_viz(viz_df: pd.DataFrame, must_include: list[str]) -> pd.Dat
 
     sample_idx = viz_df["df_idx"].values.astype(np.int64)
     sample_emb = embeddings[sample_idx].astype(np.float32)
-    nn = min(15, max(2, len(sample_emb) - 1))
-    reducer = umap_lib.UMAP(n_components=3, random_state=42, n_neighbors=nn, min_dist=0.1)
+    reducer = PCA(n_components=3, random_state=42)
     reducer.fit(sample_emb)
 
     extra_arr = np.stack(extra_embs, axis=0).astype(np.float32)
     try:
         extra_coords = reducer.transform(extra_arr)
-    except Exception as exc:  # pragma: no cover - older umap or transform unavailable
-        st.warning(f"Could not UMAP-transform extra songs into the same space: {exc}")
+    except Exception as exc:  # pragma: no cover
+        st.warning(f"Could not transform extra songs into the same PCA space: {exc}")
         return viz_df
 
     extra_df = pd.DataFrame(rows)
@@ -383,14 +497,14 @@ def render_3d_plot(
     try:
         event = st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
             key="plotly_3d_embedding",
             on_select="rerun",
             selection_mode="points",
         )
     except TypeError:
         # Older Streamlit without on_select on plotly_chart
-        st.plotly_chart(fig, use_container_width=True, key="plotly_3d_embedding")
+        st.plotly_chart(fig, width="stretch", key="plotly_3d_embedding")
         event = None
 
     if event is not None:
@@ -452,18 +566,21 @@ with st.sidebar:
     mood = st.selectbox("Mood", ["None", "Gym", "Calm"])
     min_energy = st.slider("Min energy", 0.0, 1.0, 0.0, 0.05)
 
+    st.caption("Mode guide: TF-IDF = lexical overlap, Embeddings = semantic retrieval, Hybrid = lyrics + audio features.")
     if mode == "Multilingual Embeddings":
         st.divider()
         semantic_prompt = st.text_input(
             "💬 Semantic search",
             placeholder="e.g. sad rainy day ballad",
+            help="Only available in Multilingual Embeddings mode.",
         )
     else:
+        st.caption("Semantic search input appears only in Multilingual Embeddings mode.")
         semantic_prompt = ""
 
     st.divider()
-    show_3d = st.toggle("🌐 Show 3D Embedding Space", value=False,
-                        help="Requires Multilingual Embeddings mode + umap-learn")
+    show_3d = st.toggle("🌐 Show 3D Embedding Space", value=True,
+                        help="3D projection uses PCA for stable rendering.")
     if show_3d:
         viz_samples = st.slider("Points in 3D plot", 500, 3000, 1500, 500)
 
@@ -487,26 +604,49 @@ filtered_df = apply_context_filters(
     min_energy=min_energy if min_energy > 0 else None,
 )
 
+# Reset recommendation pagination whenever query context changes.
+rec_context = (
+    mode,
+    seed_song.strip().lower(),
+    semantic_prompt.strip().lower(),
+    mood,
+    float(min_energy),
+    int(top_n),
+)
+if st.session_state.get("_last_rec_context") != rec_context:
+    st.session_state["rec_page"] = 0
+    st.session_state["_last_rec_context"] = rec_context
+
+offset = st.session_state.get("rec_page", 0) * top_n
+
 results, error_msg = None, None
+tfidf_model = None
+hybrid_without_audio = False
+emb_model = None
+hybrid_model = None
+hybrid_df = None
 
 with st.spinner("Finding similar songs…"):
     try:
         if mode == "TF-IDF":
-            results = get_tfidf_model(filtered_df).recommend(seed_song, top_n=top_n)
+            tfidf_model = get_tfidf_model(filtered_df)
+            results = tfidf_model.recommend(seed_song, top_n=top_n, offset=offset)
 
         elif mode == "Multilingual Embeddings":
             emb_model = get_embedding_model()
             if semantic_prompt.strip():
-                results = emb_model.semantic_search(semantic_prompt.strip(), top_n=top_n)
+                results = _safe_semantic_search(emb_model, semantic_prompt.strip(), top_n=top_n, offset=offset)
             else:
-                results = emb_model.recommend(seed_song, top_n=top_n)
+                results = _safe_recommend(emb_model, seed_song, top_n=top_n, offset=offset)
 
         else:
             hybrid_model, hybrid_df = get_hybrid_model(filtered_df)
             if hybrid_model is None:
-                error_msg = "⚠️ Audio features parquet not found."
+                hybrid_without_audio = True
+                tfidf_model = get_tfidf_model(filtered_df)
+                results = tfidf_model.recommend(seed_song, top_n=top_n, offset=offset)
             else:
-                results = hybrid_model.recommend(seed_song, top_n=top_n)
+                results = hybrid_model.recommend(seed_song, top_n=top_n, offset=offset)
 
     except ValueError as e:
         error_msg = f"❌ {e}"
@@ -516,6 +656,13 @@ if error_msg:
     st.error(error_msg)
 
 elif results is not None and not results.empty:
+    if hybrid_without_audio:
+        st.warning(
+            "Hybrid mode is currently using lyrics-only fallback because "
+            "`data_parquet/spotify_audio_features.parquet` was not found. "
+            "Add audio features to enable true hybrid scoring."
+        )
+
     seed_match = lyrics_df[lyrics_df["song"].str.lower() == seed_song.lower()]
     seed_info = seed_match.iloc[0].to_dict() if not seed_match.empty else {}
     rec_song_names = results["song"].tolist()
@@ -525,16 +672,28 @@ elif results is not None and not results.empty:
     with left_col:
         st.markdown(f'<div class="section-header">Recommendations for "{seed_song}"</div>',
                     unsafe_allow_html=True)
-        for i, row in results.iterrows():
+        for rank, (_, row) in enumerate(results.iterrows(), start=1):
             song_name = row.get("song", "Unknown")
             artist    = row.get("artist", "Unknown")
             score     = row.get("score", 0.0)
-            reason    = explain_recommendation(seed_info, row.to_dict()) if seed_info else ""
+            if mode == "TF-IDF" or hybrid_without_audio:
+                reason = (
+                    explain_tfidf_overlap(
+                        seed_song_name=seed_song,
+                        rec_song_name=str(song_name),
+                        df=filtered_df.reset_index(drop=True),
+                        vectorizer=tfidf_model.vectorizer,
+                        matrix=tfidf_model.matrix,
+                    )
+                    if tfidf_model is not None else ""
+                )
+            else:
+                reason = explain_recommendation(seed_info, row.to_dict()) if seed_info else ""
             st.markdown(
                 dedent(
                     f"""
                     <div class="rec-card">
-                        <div class="rec-rank">#{i+1}</div>
+                        <div class="rec-rank">#{offset + rank}</div>
                         <div class="rec-score">{score:.3f}</div>
                         <div class="rec-song">{song_name}</div>
                         <div class="rec-artist">by {artist}</div>
@@ -544,6 +703,49 @@ elif results is not None and not results.empty:
                 ).strip(),
                 unsafe_allow_html=True,
             )
+
+        if mode == "TF-IDF" or hybrid_without_audio:
+            total_candidates = max(0, len(filtered_df) - 1)
+        elif mode == "Multilingual Embeddings" and emb_model is not None and emb_model.df is not None:
+            total_candidates = max(0, len(emb_model.df) - 1)
+        elif hybrid_df is not None:
+            total_candidates = max(0, len(hybrid_df) - 1)
+        else:
+            total_candidates = max(0, len(filtered_df) - 1)
+
+        max_page = (total_candidates - 1) // top_n if total_candidates > 0 else 0
+        current_page = st.session_state.get("rec_page", 0)
+
+        st.markdown('<div class="section-header">Explore More Recommendations</div>', unsafe_allow_html=True)
+        nav1, nav2, nav3, nav4 = st.columns([1.1, 0.85, 1.1, 1.1])
+
+        with nav1:
+            if st.button("← Previous", key="rec_prev_batch",
+                         disabled=(current_page == 0),
+                         use_container_width=True):
+                st.session_state["rec_page"] = current_page - 1
+                st.rerun()
+
+        with nav2:
+            st.markdown(
+                f'<div class="page-badge">{current_page + 1} / {max_page + 1}</div>',
+                unsafe_allow_html=True,
+            )
+
+        with nav3:
+            if st.button("Next →", key="rec_next_batch",
+                         disabled=(current_page >= max_page or len(results) < top_n),
+                         use_container_width=True):
+                st.session_state["rec_page"] = current_page + 1
+                st.rerun()
+
+        with nav4:
+            if st.button("🔀 Shuffle", key="rec_random_batch",
+                         use_container_width=True):
+                candidates = [p for p in range(max_page + 1) if p != current_page]
+                if candidates:
+                    st.session_state["rec_page"] = int(np.random.choice(candidates))
+                    st.rerun()
 
     with right_col:
         st.markdown('<div class="section-header">Score Distribution</div>', unsafe_allow_html=True)
@@ -555,7 +757,28 @@ elif results is not None and not results.empty:
             ],
             "Score": [r.get("score", 0.0) for _, r in results.iterrows()],
         })
-        st.bar_chart(chart_data.set_index("Song"), color="#667eea")
+        try:
+            import plotly.express as px
+
+            fig = px.bar(
+                chart_data,
+                x="Song",
+                y="Score",
+                template="plotly_dark",
+                color_discrete_sequence=["#667eea"],
+            )
+            fig.update_layout(
+                paper_bgcolor="#0f0f1a",
+                plot_bgcolor="#131327",
+                font_color="#c0c0f0",
+                margin=dict(l=20, r=20, t=10, b=20),
+                xaxis_title="",
+                yaxis_title="Score",
+            )
+            st.plotly_chart(fig, width="stretch", key="score_distribution_dark")
+        except Exception:
+            # Fallback keeps app functional if Plotly import fails unexpectedly.
+            st.bar_chart(chart_data.set_index("Song"), color="#667eea")
 
         if seed_info:
             st.markdown('<div class="section-header">Seed Song</div>', unsafe_allow_html=True)
@@ -606,13 +829,17 @@ elif results is not None and not results.empty:
     # ── 3D Visualization ──────────────────────────────────────────────────────
     if show_3d:
         if mode != "Multilingual Embeddings":
-            st.info("💡 3D visualization uses multilingual embeddings. Switch mode to 'Multilingual Embeddings' for best results.")
+            st.markdown(
+                '<div class="custom-info-banner">💡 3D visualization uses multilingual embeddings. '
+                "Switch mode to 'Multilingual Embeddings' for best results.</div>",
+                unsafe_allow_html=True,
+            )
 
         st.markdown('<div class="section-header">🌐 3D Embedding Space</div>', unsafe_allow_html=True)
         st.caption(
-            "Each point is a song projected into 3D via UMAP. "
+            "Each point is a song projected into 3D via PCA. "
             "🔴 = seed song · 🟡 = recommended · 🔵 = others. "
-            "Seed and recommendations are kept in the same UMAP space (fit on the sample, "
+            "Seed and recommendations are kept in the same PCA space (fit on the sample, "
             "then transform for any extra titles). Nearby songs share similar lyric semantics."
         )
 
@@ -636,7 +863,7 @@ elif results is not None and not results.empty:
                     st.rerun()
             else:
                 st.warning(
-                    "3D layout is empty. Check that `umap-learn` is installed and embedding files load correctly."
+                    "3D layout is empty. Check that embedding files load correctly."
                 )
         except Exception as e:
             st.error(f"3D visualization failed: {e}")

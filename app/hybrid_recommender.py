@@ -24,7 +24,7 @@ class HybridRecommender:
         self.matrix = sparse.hstack([tfidf_matrix, audio_sparse])
         return self
 
-    def recommend(self, song_name: str, top_n: int = 5) -> pd.DataFrame:
+    def recommend(self, song_name: str, top_n: int = 5, offset: int = 0) -> pd.DataFrame:
         if self.df is None or self.matrix is None:
             raise ValueError("Call fit() before recommend().")
         matches = self.df[self.df["song"].str.lower() == song_name.lower()]
@@ -33,7 +33,9 @@ class HybridRecommender:
         idx = matches.index[0]
         scores = cosine_similarity(self.matrix[idx], self.matrix).flatten()
         ranked = scores.argsort()[::-1]
-        ranked = [i for i in ranked if i != idx][:top_n]
+        ranked = [i for i in ranked if i != idx]
+        start = max(0, int(offset))
+        ranked = ranked[start:start + top_n]
         cols = [col for col in ["artist", "song", *self.audio_feature_cols] if col in self.df.columns]
         result = self.df.loc[ranked, cols].copy()
         result["score"] = scores[ranked]

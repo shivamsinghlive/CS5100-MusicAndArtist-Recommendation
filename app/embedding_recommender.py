@@ -78,12 +78,19 @@ class EmbeddingRecommender:
         self.df.to_parquet(metadata_path, index=False)
 
     # ── Internal: shared FAISS / numpy search ─────────────────────────────────
-    def _search(self, query_vec: np.ndarray, top_n: int, exclude_idx: int | None = None):
+    def _search(
+        self,
+        query_vec: np.ndarray,
+        top_n: int,
+        exclude_idx: int | None = None,
+        offset: int = 0,
+    ):
         """
         query_vec: (1, D) float32, already normalized.
         Returns (ranked_indices, scores).
         """
-        fetch = top_n + (1 if exclude_idx is not None else 0)
+        start = max(0, int(offset))
+        fetch = top_n + start + (1 if exclude_idx is not None else 0)
 
         if self.index is not None and faiss is not None:
             faiss.normalize_L2(query_vec)
@@ -98,11 +105,11 @@ class EmbeddingRecommender:
         if exclude_idx is not None:
             pairs = [(i, s) for i, s in pairs if i != exclude_idx]
 
-        pairs = pairs[:top_n]
+        pairs = pairs[start:start + top_n]
         return [i for i, _ in pairs], [s for _, s in pairs]
 
     # ── Public API ─────────────────────────────────────────────────────────────
-    def recommend(self, song_name: str, top_n: int = 5) -> pd.DataFrame:
+    def recommend(self, song_name: str, top_n: int = 5, offset: int = 0) -> pd.DataFrame:
         if self.df is None or self.embeddings is None:
             raise ValueError("Call fit() before recommend().")
 
@@ -112,13 +119,13 @@ class EmbeddingRecommender:
             raise ValueError(f"Song not found: '{song_name}'")
 
         query = np.asarray(self.embeddings[idx:idx+1], dtype=np.float32)
-        ranked, sim_scores = self._search(query, top_n, exclude_idx=idx)
+        ranked, sim_scores = self._search(query, top_n, exclude_idx=idx, offset=offset)
 
         result = self.df.loc[ranked, [c for c in ["artist", "song"] if c in self.df.columns]].copy()
         result["score"] = sim_scores
         return result.reset_index(drop=True)
 
-    def semantic_search(self, prompt: str, top_n: int = 5) -> pd.DataFrame:
+    def semantic_search(self, prompt: str, top_n: int = 5, offset: int = 0) -> pd.DataFrame:
         if self.df is None or self.embeddings is None:
             raise ValueError("Call fit() before semantic_search().")
 
@@ -131,7 +138,7 @@ class EmbeddingRecommender:
             ).astype(np.float32)
 
         query = self._prompt_cache[prompt]
-        ranked, sim_scores = self._search(query, top_n)
+        ranked, sim_scores = self._search(query, top_n, offset=offset)
 
         result = self.df.loc[ranked, [c for c in ["artist", "song"] if c in self.df.columns]].copy()
         result["score"] = sim_scores
