@@ -48,6 +48,13 @@ st.markdown("""
 }
 [data-testid="stSidebar"] * { color: #e0e0f0 !important; }
 
+/* Placeholder text — bright enough to read on dark background */
+.stTextInput > div > div > input::placeholder,
+.stTextArea textarea::placeholder {
+    color: rgba(180, 185, 220, 0.75) !important;
+    opacity: 1 !important;
+}
+
 /* Inputs and controls */
 .stTextInput > div > div > input,
 .stTextArea textarea,
@@ -94,7 +101,65 @@ div[data-baseweb="select"] input {
     font-weight: 800;
     margin-bottom: 0.2rem;
 }
-.subtitle { color: #888; font-size: 0.95rem; margin-bottom: 1.5rem; }
+.subtitle { color: #888; font-size: 0.95rem; margin-bottom: 1rem; }
+
+/* ── Compact stats bar ── */
+.stats-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: #131327;
+    border: 1px solid #2d2d55;
+    border-radius: 12px;
+    padding: 0.55rem 1.1rem;
+    margin-bottom: 1.2rem;
+    flex-wrap: wrap;
+}
+.stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 0 1.2rem 0 0;
+    margin-right: 1rem;
+    border-right: 1px solid #2d2d55;
+}
+.stat-item:last-of-type { border-right: none; }
+.stat-value {
+    font-size: 1.35rem;
+    font-weight: 800;
+    color: #e8e8ff;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+}
+.stat-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: #5a5a8a;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.mode-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(102,126,234,0.18);
+    border: 1px solid rgba(102,126,234,0.4);
+    border-radius: 999px;
+    padding: 0.28rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #a0aeff;
+    white-space: nowrap;
+    margin-right: 0.9rem;
+    flex-shrink: 0;
+}
+.mode-desc {
+    font-size: 0.8rem;
+    color: #7070a0;
+    line-height: 1.4;
+    flex: 1;
+    min-width: 140px;
+}
 
 .rec-card {
     background: linear-gradient(135deg, #1e1e3a 0%, #252545 100%);
@@ -215,6 +280,15 @@ def get_tfidf_model(df: pd.DataFrame) -> TfidfRecommender:
     return TfidfRecommender().fit(df)
 
 
+def _hybrid_audio_mtime() -> float:
+    """Mtime so @cache_resource invalidates when spotify_audio_features.parquet is added or replaced."""
+    p = Path(DEFAULT_AUDIO_PARQUET)
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return -1.0
+
+
 @st.cache_resource(show_spinner="🧠 Loading embedding model…")
 def get_embedding_model() -> EmbeddingRecommender:
     model = EmbeddingRecommender()
@@ -230,11 +304,14 @@ def get_embedding_model() -> EmbeddingRecommender:
 
 
 @st.cache_resource(show_spinner="🎛️ Building hybrid model…")
-def get_hybrid_model(df: pd.DataFrame):
+def get_hybrid_model(df: pd.DataFrame, audio_mtime: float = -1.0):
+    del audio_mtime  # included in cache hash so hybrid reloads when parquet is added/updated
     if not Path(DEFAULT_AUDIO_PARQUET).exists():
         return None, None
     audio_df = load_dataset(DEFAULT_AUDIO_PARQUET)
     hybrid_df = merge_lyrics_audio(df, audio_df)
+    if hybrid_df.empty:
+        return None, None
     return HybridRecommender().fit(hybrid_df), hybrid_df
 
 
@@ -574,8 +651,14 @@ with st.sidebar:
             placeholder="e.g. sad rainy day ballad",
             help="Only available in Multilingual Embeddings mode.",
         )
+        st.caption(
+            "Type any mood, theme, or lyric fragment — the model finds songs "
+            "with similar meaning across all languages. "
+            "Examples: *\"heartbreak at midnight\"*, *\"upbeat summer road trip\"*, *\"lonely winter night\"*. "
+            "Leave blank to use the seed song above instead."
+        )
     else:
-        st.caption("Semantic search input appears only in Multilingual Embeddings mode.")
+        st.caption("Semantic search is only available in Multilingual Embeddings mode.")
         semantic_prompt = ""
 
     st.divider()
@@ -591,10 +674,44 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Songs", f"{len(lyrics_df):,}")
-c2.metric("Artists", f"{lyrics_df['artist'].nunique():,}")
-c3.metric("Mode", mode)
+_n_songs   = len(lyrics_df)
+_n_artists = lyrics_df["artist"].nunique()
+_avg_words = int(lyrics_df["text"].dropna().apply(lambda t: len(str(t).split())).mean())
+
+_mode_icons = {
+    "TF-IDF": "📝",
+    "Multilingual Embeddings": "🌐",
+    "Hybrid": "🎛️",
+}
+_mode_descs = {
+    "TF-IDF": "Matches songs by lyric vocabulary overlap — fast &amp; interpretable.",
+    "Multilingual Embeddings": "Matches songs by lyric meaning &amp; mood using AI — works across languages without needing shared words.",
+    "Hybrid": "Combines lyric text similarity with audio features (tempo, energy, valence) for richer recommendations.",
+}
+_badge_icon = _mode_icons.get(mode, "🎵")
+_badge_desc = _mode_descs.get(mode, "")
+
+st.markdown(
+    f"""
+<div class="stats-bar">
+  <div class="stat-item">
+    <span class="stat-value">{_n_songs:,}</span>
+    <span class="stat-label">Songs</span>
+  </div>
+  <div class="stat-item">
+    <span class="stat-value">{_n_artists:,}</span>
+    <span class="stat-label">Artists</span>
+  </div>
+  <div class="stat-item" style="border-right:none;margin-right:1.4rem;">
+    <span class="stat-value">~{_avg_words:,}</span>
+    <span class="stat-label">Avg words / song</span>
+  </div>
+  <span class="mode-badge">{_badge_icon} {mode}</span>
+  <span class="mode-desc">{_badge_desc}</span>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 st.divider()
 
 # ── Recommendation logic ──────────────────────────────────────────────────────
@@ -640,13 +757,19 @@ with st.spinner("Finding similar songs…"):
                 results = _safe_recommend(emb_model, seed_song, top_n=top_n, offset=offset)
 
         else:
-            hybrid_model, hybrid_df = get_hybrid_model(filtered_df)
+            hybrid_model, hybrid_df = get_hybrid_model(filtered_df, _hybrid_audio_mtime())
             if hybrid_model is None:
                 hybrid_without_audio = True
                 tfidf_model = get_tfidf_model(filtered_df)
                 results = tfidf_model.recommend(seed_song, top_n=top_n, offset=offset)
             else:
-                results = hybrid_model.recommend(seed_song, top_n=top_n, offset=offset)
+                try:
+                    results = hybrid_model.recommend(seed_song, top_n=top_n, offset=offset)
+                except ValueError:
+                    # Song not in the small hybrid subset → fall back to TF-IDF on full lyrics
+                    hybrid_without_audio = True
+                    tfidf_model = get_tfidf_model(filtered_df)
+                    results = tfidf_model.recommend(seed_song, top_n=top_n, offset=offset)
 
     except ValueError as e:
         error_msg = f"❌ {e}"
@@ -657,11 +780,23 @@ if error_msg:
 
 elif results is not None and not results.empty:
     if hybrid_without_audio:
-        st.warning(
-            "Hybrid mode is currently using lyrics-only fallback because "
-            "`data_parquet/spotify_audio_features.parquet` was not found. "
-            "Add audio features to enable true hybrid scoring."
-        )
+        if not Path(DEFAULT_AUDIO_PARQUET).exists():
+            st.warning(
+                "Hybrid mode is using lyrics-only fallback because "
+                f"`{DEFAULT_AUDIO_PARQUET}` was not found. "
+                "Add Spotify audio CSV(s), then run `python -m scripts.merge_audio_features` (see README)."
+            )
+        else:
+            st.markdown(
+                '<div style="background:#1a1f2e;border:1px solid #2d3550;border-radius:8px;'
+                'padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.88rem;'
+                'color:#b8bdd8;line-height:1.5;">'
+                "💡 <b>Hybrid (lyrics-only fallback):</b> this song isn't in the audio-features subset "
+                "(only ~325 of 57,650 songs matched the Spotify chart CSVs by exact artist+song name). "
+                "Showing TF-IDF lyrics results instead — quality is the same for most songs."
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
     seed_match = lyrics_df[lyrics_df["song"].str.lower() == seed_song.lower()]
     seed_info = seed_match.iloc[0].to_dict() if not seed_match.empty else {}
@@ -748,102 +883,166 @@ elif results is not None and not results.empty:
                     st.rerun()
 
     with right_col:
-        st.markdown('<div class="section-header">Score Distribution</div>', unsafe_allow_html=True)
-        chart_data = pd.DataFrame({
-            "Song": [
-                (str(r.get("song", "?"))[:22] + "…")
-                if len(str(r.get("song", ""))) > 22 else r.get("song", "?")
-                for _, r in results.iterrows()
-            ],
-            "Score": [r.get("score", 0.0) for _, r in results.iterrows()],
-        })
+        st.markdown('<div class="section-header">📊 Similarity Scores</div>', unsafe_allow_html=True)
         try:
-            import plotly.express as px
+            import plotly.graph_objects as go
 
-            fig = px.bar(
-                chart_data,
-                x="Song",
-                y="Score",
-                template="plotly_dark",
-                color_discrete_sequence=["#667eea"],
+            _songs_full  = [str(r.get("song", "?")) for _, r in results.iterrows()]
+            _songs_short = [(s[:18] + "…") if len(s) > 18 else s for s in _songs_full]
+            _scores      = [float(r.get("score", 0.0)) for _, r in results.iterrows()]
+            _artists     = [str(r.get("artist", "")) for _, r in results.iterrows()]
+            _ranks       = list(range(1, len(_scores) + 1))
+
+            # Dynamic Y-axis: zoom in so bar differences are visible
+            _y_min = max(0.0, min(_scores) - 0.06) if _scores else 0.0
+            _y_max = min(1.0, max(_scores) + 0.04) if _scores else 1.0
+
+            # Gradient opacity: rank 1 = most opaque
+            _n = len(_scores)
+            _bar_colors = [
+                f"rgba(102,126,234,{0.5 + 0.5*(_n - i)/_n:.2f})"
+                for i in range(_n)
+            ]
+
+            _score_label = (
+                "Cosine Similarity (embedding space)"
+                if mode == "Multilingual Embeddings"
+                else "TF-IDF Cosine Score (lyric overlap)"
             )
-            fig.update_layout(
+
+            _fig_bar = go.Figure(go.Bar(
+                x=_songs_short,
+                y=_scores,
+                marker_color=_bar_colors,
+                customdata=list(zip(_songs_full, _artists, _scores, _ranks)),
+                hovertemplate=(
+                    "<b>#%{customdata[3]} — %{customdata[0]}</b><br>"
+                    "Artist: %{customdata[1]}<br>"
+                    "Score: %{customdata[2]:.4f}"
+                    "<extra></extra>"
+                ),
+            ))
+            _fig_bar.update_layout(
+                height=220,
                 paper_bgcolor="#0f0f1a",
                 plot_bgcolor="#131327",
-                font_color="#c0c0f0",
-                margin=dict(l=20, r=20, t=10, b=20),
-                xaxis_title="",
-                yaxis_title="Score",
+                font=dict(color="#c0c0f0", size=11),
+                margin=dict(l=10, r=10, t=6, b=55),
+                xaxis=dict(
+                    tickangle=-38,
+                    tickfont=dict(size=9, color="#c0c0f0"),
+                    showgrid=False,
+                    title="",
+                    linecolor="rgba(255,255,255,0.1)",
+                    tickcolor="rgba(255,255,255,0.15)",
+                ),
+                yaxis=dict(
+                    range=[_y_min, _y_max],
+                    title=dict(text="Score", font=dict(size=10, color="#c0c0f0")),
+                    gridcolor="rgba(255,255,255,0.06)",
+                    tickformat=".3f",
+                    tickfont=dict(size=9, color="#c0c0f0"),
+                    linecolor="rgba(255,255,255,0.1)",
+                    zerolinecolor="rgba(255,255,255,0.06)",
+                ),
+                showlegend=False,
             )
-            st.plotly_chart(fig, width="stretch", key="score_distribution_dark")
+            st.plotly_chart(_fig_bar, use_container_width=True, key="score_distribution_dark")
+
+            # Explain what the score means
+            if mode == "Multilingual Embeddings":
+                st.caption(
+                    f"**Cosine similarity** in 384-dim semantic space — 1.0 = identical meaning, 0 = unrelated. "
+                    f"Y-axis starts at {_y_min:.3f} to highlight differences. "
+                    f"Higher score = more similar lyric theme/mood."
+                )
+            else:
+                st.caption(
+                    f"**TF-IDF cosine score** — measures shared lyric vocabulary overlap. "
+                    f"Y-axis starts at {_y_min:.3f} to highlight differences. "
+                    f"Higher score = more words in common."
+                )
         except Exception:
-            # Fallback keeps app functional if Plotly import fails unexpectedly.
-            st.bar_chart(chart_data.set_index("Song"), color="#667eea")
+            _chart_data = pd.DataFrame({
+                "Score": [float(r.get("score", 0.0)) for _, r in results.iterrows()]
+            }, index=[(str(r.get("song","?"))[:18]+"…") if len(str(r.get("song","")))>18
+                      else r.get("song","?") for _, r in results.iterrows()])
+            st.bar_chart(_chart_data, color="#667eea")
 
         if seed_info:
-            st.markdown('<div class="section-header">Seed Song</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">🎵 Seed Song</div>', unsafe_allow_html=True)
 
-            artist_name  = seed_info.get("artist", "Unknown")
-            artist_count = len(lyrics_df[lyrics_df["artist"] == artist_name])
+            _artist_name  = seed_info.get("artist", "Unknown")
+            _artist_count = len(lyrics_df[lyrics_df["artist"] == _artist_name])
 
-            # Build optional tags (dedent so Markdown does not treat lines as code blocks)
-            tags = dedent(
-                f"""
-                <span style="background:rgba(102,126,234,0.15);color:#667eea;border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">🎤 {artist_count} songs in dataset</span>
-                """
-            ).strip()
+            # Mode-specific explanation so users understand what's being matched
+            if mode == "TF-IDF":
+                _method_desc = "Finding songs with <b>similar lyric vocabulary</b> — words that appear together most often."
+            elif mode == "Multilingual Embeddings":
+                _method_desc = "Finding songs with <b>similar lyric meaning &amp; mood</b> using multilingual AI — can match across languages."
+            else:
+                _method_desc = "Finding songs with <b>similar lyrics + audio feel</b> — tempo, energy, and mood combined."
+
+            # Build tags
+            _tags = (
+                f'<span style="background:rgba(102,126,234,0.15);color:#667eea;'
+                f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">'
+                f'🎤 {_artist_count} songs by this artist in dataset</span>'
+            )
             if seed_info.get("language"):
-                tags += dedent(
-                    f"""
-                    <span style="background:rgba(102,126,234,0.15);color:#667eea;border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">🌐 {seed_info["language"]}</span>
-                    """
-                ).strip()
+                _tags += (
+                    f' <span style="background:rgba(102,126,234,0.15);color:#667eea;'
+                    f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">'
+                    f'🌐 {seed_info["language"]}</span>'
+                )
             if seed_info.get("energy"):
-                tags += dedent(
-                    f"""
-                    <span style="background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">⚡ energy {float(seed_info["energy"]):.2f}</span>
-                    """
-                ).strip()
+                _e = float(seed_info["energy"])
+                _e_label = "high energy" if _e > 0.7 else ("low energy" if _e < 0.35 else "mid energy")
+                _tags += (
+                    f' <span style="background:rgba(245,158,11,0.15);color:#f59e0b;'
+                    f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">'
+                    f'⚡ {_e_label} ({_e:.2f})</span>'
+                )
             if seed_info.get("valence"):
-                tags += dedent(
-                    f"""
-                    <span style="background:rgba(52,211,153,0.15);color:#34d399;border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">😊 valence {float(seed_info["valence"]):.2f}</span>
-                    """
-                ).strip()
+                _v = float(seed_info["valence"])
+                _v_label = "positive vibe" if _v > 0.6 else ("melancholic" if _v < 0.35 else "neutral mood")
+                _tags += (
+                    f' <span style="background:rgba(52,211,153,0.15);color:#34d399;'
+                    f'border-radius:20px;padding:0.2rem 0.7rem;font-size:0.78rem">'
+                    f'😊 {_v_label} ({_v:.2f})</span>'
+                )
 
             st.markdown(
-                dedent(
-                    f"""
-                    <div class="rec-card" style="margin-top:0.5rem">
-                        <div class="rec-song">{seed_info.get("song", "—")}</div>
-                        <div class="rec-artist">by {artist_name}</div>
-                        <div style="margin-top:0.8rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">
-                            {tags}
-                        </div>
+                f"""<div class="rec-card" style="margin-top:0.5rem">
+                    <div class="rec-song">{seed_info.get("song", "—")}</div>
+                    <div class="rec-artist" style="margin-bottom:0.55rem">by {_artist_name}</div>
+                    <div style="font-size:0.8rem;color:#7878a8;line-height:1.5;margin-bottom:0.65rem">
+                        {_method_desc}
                     </div>
-                    """
-                ).strip(),
+                    <div style="display:flex;gap:0.45rem;flex-wrap:wrap;align-items:center">
+                        {_tags}
+                    </div>
+                </div>""",
                 unsafe_allow_html=True,
             )
 
-    # ── 3D Visualization ──────────────────────────────────────────────────────
+    # ── 3D + 2D Visualization ─────────────────────────────────────────────────
     if show_3d:
         if mode != "Multilingual Embeddings":
             st.markdown(
-                '<div class="custom-info-banner">💡 3D visualization uses multilingual embeddings. '
-                "Switch mode to 'Multilingual Embeddings' for best results.</div>",
+                '<div class="custom-info-banner">💡 Both visualizations use multilingual embeddings — '
+                "switch to 'Multilingual Embeddings' mode for best results.</div>",
                 unsafe_allow_html=True,
             )
 
-        st.markdown('<div class="section-header">🌐 3D Embedding Space</div>', unsafe_allow_html=True)
+        # ── 3D Interactive Plot ───────────────────────────────────────────────
+        st.markdown('<div class="section-header">🌐 3D Embedding Space — Rotate to Explore</div>', unsafe_allow_html=True)
         st.caption(
-            "Each point is a song projected into 3D via PCA. "
-            "🔴 = seed song · 🟡 = recommended · 🔵 = others. "
-            "Seed and recommendations are kept in the same PCA space (fit on the sample, "
-            "then transform for any extra titles). Nearby songs share similar lyric semantics."
+            "Each dot = one song, projected into 3D using PCA on multilingual lyric embeddings. "
+            "Songs with similar meaning cluster together. "
+            "🔴 = your seed song · 🟡 = recommended songs · 🔵 = all others. "
+            "Hover to see song names. Click a point to use it as the new seed."
         )
-
-        # Use embedding model regardless of current mode for the visualization
         try:
             emb_model = get_embedding_model()
             rec_key = "|".join(sorted(str(s) for s in rec_song_names))
@@ -862,11 +1061,125 @@ elif results is not None and not results.empty:
                     st.session_state["seed_override"] = clicked_song
                     st.rerun()
             else:
-                st.warning(
-                    "3D layout is empty. Check that embedding files load correctly."
-                )
+                st.warning("3D layout is empty. Check that embedding files load correctly.")
         except Exception as e:
             st.error(f"3D visualization failed: {e}")
+
+        # ── 2D Cluster Overview ───────────────────────────────────────────────
+        st.markdown('<div class="section-header">🗺️ 2D Cluster Map — Song Embedding Space</div>', unsafe_allow_html=True)
+        st.caption(
+            "A bird's-eye view of the entire library in 2D. "
+            "Each dot is a song; nearby dots share similar lyric themes and mood. "
+            "🔴★ = seed song · 🟡◆ = recommended songs · faint blue dots = all other songs. "
+            "Visible clusters reflect real thematic groupings learned by the multilingual model — "
+            "no genre labels were used."
+        )
+        try:
+            _emb_model_2d = get_embedding_model()
+            if _emb_model_2d.df is not None and _emb_model_2d.embeddings is not None:
+                import plotly.graph_objects as go_2d
+
+                # ── Sample for 2D (fixed seed so layout is stable across reruns) ──
+                _n2d   = min(3000, len(_emb_model_2d.df))
+                _rng2d = np.random.default_rng(0)
+                _idx2d = np.sort(_rng2d.choice(len(_emb_model_2d.df), _n2d, replace=False)).astype(np.int64)
+                _emb2d = _emb_model_2d.embeddings[_idx2d].astype(np.float32)
+                _meta2d = _emb_model_2d.df.iloc[_idx2d].reset_index(drop=True)
+
+                # ── PCA to 2D (fast, stable, no extra deps) ──
+                from sklearn.decomposition import PCA as _PCA2D
+                _pca2d  = _PCA2D(n_components=2, random_state=0)
+                _coords = _pca2d.fit_transform(_emb2d)
+
+                _df2d = _meta2d[["artist", "song"]].copy()
+                _df2d["x"] = _coords[:, 0]
+                _df2d["y"] = _coords[:, 1]
+                _df2d["df_idx"] = _idx2d
+
+                # ── Inject seed + recommended songs if missing ──
+                _seed_lower = seed_song.lower()
+                _rec_lower  = {s.lower() for s in rec_song_names}
+                _present    = set(_df2d["song"].str.lower())
+
+                for _sname in [seed_song, *rec_song_names]:
+                    if not _sname or _sname.lower() in _present:
+                        continue
+                    _m = _emb_model_2d.df[_emb_model_2d.df["song"].str.lower() == _sname.lower()]
+                    if _m.empty:
+                        continue
+                    _ridx = int(_m.index[0])
+                    _extra_emb = _emb_model_2d.embeddings[_ridx:_ridx+1].astype(np.float32)
+                    _xy = _pca2d.transform(_extra_emb)[0]
+                    _new_row = pd.DataFrame([{
+                        "artist": _emb_model_2d.df.iloc[_ridx]["artist"],
+                        "song":   _emb_model_2d.df.iloc[_ridx]["song"],
+                        "x": float(_xy[0]), "y": float(_xy[1]),
+                        "df_idx": _ridx,
+                    }])
+                    _df2d = pd.concat([_df2d, _new_row], ignore_index=True)
+                    _present.add(_sname.lower())
+
+                # ── Classify points ──
+                def _pt2d(row):
+                    s = str(row["song"]).lower()
+                    if s == _seed_lower:  return "seed"
+                    if s in _rec_lower:   return "recommended"
+                    return "other"
+
+                _df2d["ptype"] = _df2d.apply(_pt2d, axis=1)
+
+                _style2d = {
+                    "other":       dict(color="rgba(110,120,210,0.28)", size=4,  symbol="circle"),
+                    "recommended": dict(color="#f59e0b",                size=11, symbol="diamond"),
+                    "seed":        dict(color="#ef4444",                size=15, symbol="star"),
+                }
+                _label2d = {"other": "All songs", "recommended": "Recommended", "seed": "Seed song"}
+
+                _fig2d = go_2d.Figure()
+                for _pt, _sty in _style2d.items():
+                    _sub = _df2d[_df2d["ptype"] == _pt]
+                    if _sub.empty:
+                        continue
+                    _fig2d.add_trace(go_2d.Scatter(
+                        x=_sub["x"], y=_sub["y"],
+                        mode="markers",
+                        name=_label2d[_pt],
+                        marker=dict(
+                            size=_sty["size"],
+                            color=_sty["color"],
+                            symbol=_sty["symbol"],
+                            line=dict(width=0.4, color="rgba(255,255,255,0.15)"),
+                        ),
+                        text=_sub["song"] + "<br>" + _sub["artist"],
+                        hovertemplate="<b>%{text}</b><extra></extra>",
+                    ))
+
+                _fig2d.update_layout(
+                    height=460,
+                    template="plotly_dark",
+                    paper_bgcolor="#0f0f1a",
+                    plot_bgcolor="#0c0c1e",
+                    font=dict(color="#c0c0f0", size=12),
+                    legend=dict(
+                        bgcolor="rgba(18,18,45,0.88)",
+                        bordercolor="#3a3a6a",
+                        x=0.01, y=0.99,
+                        font=dict(size=11),
+                        title=dict(text="Legend", font=dict(size=11)),
+                    ),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                               title=dict(text="← Semantic Dimension 1 →",
+                                          font=dict(size=10, color="#555588"))),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                               title=dict(text="← Semantic Dimension 2 →",
+                                          font=dict(size=10, color="#555588"))),
+                    margin=dict(l=10, r=10, t=10, b=40),
+                )
+                st.plotly_chart(_fig2d, use_container_width=True, key="cluster_2d_map")
+            else:
+                st.warning("Embedding model not loaded — 2D cluster map unavailable.")
+        except Exception as _e2d:
+            st.error(f"2D cluster map failed: {_e2d}")
 
 elif results is not None and results.empty:
     st.warning("No results found. Try a different song name.")

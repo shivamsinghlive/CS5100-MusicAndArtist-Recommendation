@@ -9,6 +9,8 @@ PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Raw datasets
 SONGS_FILE = RAW_DATA_DIR / "spotify_millsongdata.csv"
+# Kaggle companion CSV, e.g. https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify
+# Expected columns include artists + track_name (or artist/song) plus energy, valence, tempo, etc.
 AUDIO_FILE = RAW_DATA_DIR / "spotify_songs.csv"
 UNIVERSAL_TOP_FILE = RAW_DATA_DIR / "universal_top_spotify_songs.csv"
 
