@@ -1,8 +1,16 @@
-# Music Recommendation Project
+# 🎵 CS5100 Music Recommender
 
-This project converts your notebook into a modular Python app.
+**Cross-lingual · TF-IDF · Multilingual Embeddings · Hybrid Audio+Lyrics · 3D Visualization**
 
-## Included modules
+A content-based music recommendation system built for CS 5100 (Foundations of AI). Supports three recommendation modes — TF-IDF lyric similarity, multilingual sentence embeddings (cross-lingual), and a hybrid lyrics + audio features model — with an interactive Streamlit interface featuring semantic search, explainable recommendations, and 3D/2D embedding visualizations.
+
+## App Preview
+
+![App Screenshot](docs/app_screenshot.png)
+
+---
+
+## Project Structure
 - `app/preprocess.py`: cleans lyrics and builds `cleaned_text`
 - `app/tfidf_recommender.py`: baseline TF-IDF recommender
 - `app/embedding_recommender.py`: multilingual embedding recommender with FAISS
