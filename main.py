@@ -1,6 +1,10 @@
 from src.data_pipeline import load_and_clean_data
 from src.recommender import get_hybrid_recommendations
 
+'''
+Call `data_pipeline.py` to retrieve the data, then 
+pass the data to `recommender.py` for recommendations.
+'''
 
 def main() -> None:
     # 1) Load data (Member A)
